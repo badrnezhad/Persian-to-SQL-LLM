@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>دستیار دیتابیس</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#697386; --line:#e5e9f0; --blue:#315efb; --bg:#f5f7fb; }
+    * { box-sizing:border-box }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.7 Tahoma,Arial,sans-serif }
+    main { width:min(1120px,94vw); margin:36px auto }
+    header { display:flex; justify-content:space-between; align-items:center; margin-bottom:22px }
+    h1 { font-size:24px; margin:0 } h2 { font-size:18px; margin:0 0 12px }
+    .muted { color:var(--muted); font-size:13px }
+    .layout { display:grid; grid-template-columns: minmax(0,1.1fr) minmax(360px,.9fr); gap:18px; align-items:start }
+    .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:0 5px 24px #17203308 }
+    .chatlog { min-height:250px; max-height:440px; overflow:auto; display:flex; flex-direction:column; gap:12px; margin:12px 0 }
+    .bubble { padding:11px 14px; border-radius:12px; max-width:92%; white-space:pre-wrap; overflow-wrap:anywhere }
+    .user { background:#eaf0ff; align-self:flex-start } .bot { background:#f1f3f6; align-self:flex-end }
+    textarea { width:100%; min-height:82px; resize:vertical; padding:12px; border:1px solid var(--line); border-radius:10px; font:inherit }
+    button { border:0; border-radius:9px; background:var(--blue); color:white; padding:10px 18px; font:inherit; cursor:pointer }
+    button:disabled { opacity:.55; cursor:wait }.row { display:flex; justify-content:space-between; gap:12px; align-items:center; margin-top:10px }
+    pre { direction:ltr; text-align:left; background:#111827; color:#e8edfa; border-radius:8px; padding:12px; overflow:auto; white-space:pre-wrap }
+    .result { margin-top:12px }.tables { display:grid; gap:14px }
+    .table-wrap { overflow:auto; max-width:100% } table { width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap }
+    th,td { border-bottom:1px solid var(--line); padding:7px 9px; text-align:right } th { background:#f7f8fb }
+    .table-title { display:flex; justify-content:space-between; align-items:center; margin-bottom:7px }
+    .error { color:#b42318 }
+    @media(max-width:800px) { .layout { grid-template-columns:1fr } main { margin:20px auto } }
+  </style>
+</head>
+<body>
+<main>
+  <header><div><h1>دستیار دیتابیس</h1><div class="muted">با فارسی بنویسید؛ نتیجه در MySQL اجرا می‌شود.</div></div><button id="refresh">به‌روزرسانی جدول‌ها</button></header>
+  <div class="layout">
+    <section class="card">
+      <h2>گفت‌وگو با دیتابیس</h2>
+      <div class="muted">مثال: «محصول‌های با موجودی کمتر از ۲۰ را نشان بده» یا «یک محصول به نام ماوس با قیمت ۳۰۰۰۰۰ و موجودی ۵ اضافه کن».</div>
+      <div id="chatlog" class="chatlog"><div class="bubble bot">سلام! بگو چه اطلاعاتی را می‌خواهی ببینی یا تغییر بدهی.</div></div>
+      <form id="form"><textarea id="message" placeholder="دستورت را فارسی بنویس…" required></textarea><div class="row"><span id="status" class="muted"></span><button id="send">اجرا</button></div></form>
+    </section>
+    <section class="card"><h2>۱۰ ردیف آخر هر جدول</h2><div id="tables" class="tables"><span class="muted">در حال دریافت…</span></div></section>
+  </div>
+</main>
+<script>
+  const log = document.querySelector('#chatlog');
+  function bubble(text, who='bot', html=false) { const el=document.createElement('div'); el.className=`bubble ${who}`; if(html) el.innerHTML=text; else el.textContent=text; log.append(el); log.scrollTop=log.scrollHeight; return el; }
+  function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  async function refreshTables() {
+    const box=document.querySelector('#tables'); box.innerHTML='<span class="muted">در حال دریافت…</span>';
+    try { const response=await fetch('/api/tables'); const data=await response.json(); if(!response.ok) throw new Error(data.error);
+      box.innerHTML='';
+      for(const [name,table] of Object.entries(data)) {
+        const section=document.createElement('div'); section.innerHTML=`<div class="table-title"><strong>${esc(name)}</strong><span class="muted">${table.rows.length} ردیف</span></div>`;
+        const wrap=document.createElement('div'); wrap.className='table-wrap';
+        if(!table.rows.length) wrap.innerHTML='<span class="muted">جدول خالی است.</span>';
+        else { wrap.innerHTML=`<table><thead><tr>${table.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${table.rows.map(row=>`<tr>${table.columns.map(c=>`<td>${esc(row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`; }
+        section.append(wrap); box.append(section);
+      }
+    } catch(e) { box.textContent=e.message || 'خطا در دریافت جدول‌ها'; }
+  }
+  document.querySelector('#refresh').addEventListener('click', refreshTables);
+  document.querySelector('#form').addEventListener('submit', async event => {
+    event.preventDefault(); const input=document.querySelector('#message'), button=document.querySelector('#send'), status=document.querySelector('#status');
+    const message=input.value.trim(); if(!message) return; bubble(message,'user'); input.value=''; button.disabled=true; status.textContent='در حال پردازش…';
+    try {
+      const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})}); const data=await response.json();
+      if(!response.ok) throw new Error(data.error || 'درخواست انجام نشد');
+      const result=data.result.kind==='rows'
+        ? `<div>تعداد ردیف: ${data.result.rows.length}</div><div class="table-wrap"><table><thead><tr>${data.result.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${data.result.rows.map(row=>`<tr>${data.result.columns.map(c=>`<td>${esc(row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
+        : `تعداد ردیف تغییرکرده: ${data.result.affected_rows}`;
+      bubble(`<div>کوئری اجرا شد:</div><pre>${esc(data.sql)}</pre><div class="result">${result}</div>`,'bot',true); await refreshTables();
+    } catch(e) { bubble(e.message,'bot'); }
+    finally { button.disabled=false; status.textContent=''; input.focus(); }
+  });
+  refreshTables();
+</script>
+</body>
+</html>
