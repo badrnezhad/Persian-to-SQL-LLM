@@ -43,7 +43,7 @@ def generate_sql(user_text):
         raise RuntimeError("کلید OPENAI_API_KEY در فایل .env تنظیم نشده است.")
     client = OpenAI()
     response = client.responses.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-6-astra"),
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         instructions=(
             "Translate the user's Persian request into exactly one MySQL statement. "
             "Only generate SELECT, INSERT, UPDATE, or DELETE statements against "
@@ -57,25 +57,32 @@ def generate_sql(user_text):
 
 
 def validate_sql(sql):
-    sql = re.sub(r"^```(?:sql)?\s*|\s*```$", "", sql.strip(), flags=re.IGNORECASE)
-    if not sql or "UNSUPPORTED" == sql.upper():
+    sql = re.sub(r"^```(?:sql)?\s*|\s*```$", "", (sql or "").strip(), flags=re.IGNORECASE)
+    if not sql or sql.rstrip(";.").upper() == "UNSUPPORTED":
         raise ValueError("برای این درخواست نتوانستم کوئری مجاز بسازم.")
-    # One optional trailing semicolon is accepted; all other semicolons are rejected.
-    if ";" in sql.rstrip().rstrip(";"):
-        raise ValueError("فقط اجرای یک کوئری در هر درخواست مجاز است.")
     try:
-        statements = sqlglot.parse(sql, read="mysql")
+        statements = [stmt for stmt in sqlglot.parse(sql, read="mysql") if stmt is not None]
     except sqlglot.errors.ParseError as exc:
         raise ValueError("SQL تولیدشده معتبر نیست.") from exc
-    if len(statements) != 1 or statements[0] is None:
-        raise ValueError("فقط یک کوئری مجاز است.")
+    if len(statements) != 1:
+        raise ValueError("فقط اجرای یک کوئری در هر درخواست مجاز است.")
     tree = statements[0]
     if not isinstance(tree, (exp.Select, exp.Insert, exp.Update, exp.Delete)):
         raise ValueError("فقط SELECT، INSERT، UPDATE و DELETE مجاز هستند.")
+    cte_names = {
+        cte.alias_or_name.lower()
+        for cte in tree.find_all(exp.CTE)
+        if cte.alias_or_name
+    }
+    base_tables = []
     for table in tree.find_all(exp.Table):
-        if table.db or table.catalog or table.name.lower() not in TABLES:
+        table_name = table.name.lower()
+        if not table.db and not table.catalog and table_name in cte_names:
+            continue
+        if table.db or table.catalog or table_name not in TABLES:
             raise ValueError("این کوئری به جدول مجاز دسترسی ندارد.")
-    if not list(tree.find_all(exp.Table)):
+        base_tables.append(table_name)
+    if not base_tables:
         raise ValueError("کوئری باید به یکی از جدول‌های مجاز دسترسی داشته باشد.")
     if isinstance(tree, (exp.Update, exp.Delete)) and tree.args.get("where") is None:
         raise ValueError("برای UPDATE و DELETE باید شرط WHERE مشخص شود.")
